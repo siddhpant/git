@@ -885,6 +885,30 @@ test_expect_success '--show-notes=ref accumulates' '
 	test_cmp expect-both-reversed actual
 '
 
+test_expect_success 'displayed notes honor raw notes formatting' '
+	git show -s --format=%N >actual &&
+	test_grep "^order test$" actual &&
+	! grep "Notes" actual
+'
+
+test_expect_success 'displayed notes are suppressed by --no-notes' '
+	git log --no-notes -1 >actual &&
+	test_cmp expect-not-other actual
+'
+
+test_expect_success 'explicit notes ref replaces default displayed notes' '
+	git log --notes=other -1 >actual &&
+	test_cmp expect-other actual
+'
+
+test_expect_success 'displayed notes are used for grep matching' '
+	commit=$(git rev-parse HEAD) &&
+	git log --grep="order test" -1 >actual &&
+	test_grep "^commit $commit$" actual &&
+	git log --no-notes --grep="order test" -1 >actual &&
+	test_must_be_empty actual
+'
+
 test_expect_success 'Allow notes on non-commits (trees, blobs, tags)' '
 	test_config core.notesRef refs/notes/other &&
 	echo "Note on a tree" >expect &&
