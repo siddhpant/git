@@ -854,10 +854,9 @@ void show_log(struct rev_info *opt)
 	}
 
 	if (opt->show_notes) {
-		int raw;
 		struct strbuf notebuf = STRBUF_INIT;
+		bool raw = (opt->commit_format == CMIT_FMT_USERFORMAT);
 
-		raw = (opt->commit_format == CMIT_FMT_USERFORMAT);
 		format_display_notes(&commit->object.oid, &notebuf,
 				     get_log_output_encoding(), raw);
 		ctx.notes_message = strbuf_detach(&notebuf, NULL);

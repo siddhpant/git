@@ -1273,11 +1273,11 @@ void free_notes(struct notes_tree *t)
  * If the given notes_tree is NULL, the internal/default notes_tree will be
  * used instead.
  *
- * (raw != 0) gives the %N userformat; otherwise, the note message is given
+ * (raw == true) gives the %N userformat; otherwise, the note message is given
  * for human consumption.
  */
 static void format_note(struct notes_tree *t, const struct object_id *object_oid,
-			struct strbuf *sb, const char *output_encoding, int raw)
+			struct strbuf *sb, const char *output_encoding, bool raw)
 {
 	static const char utf8[] = "utf-8";
 	const struct object_id *oid;
@@ -1338,7 +1338,7 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 }
 
 void format_display_notes(const struct object_id *object_oid,
-			  struct strbuf *sb, const char *output_encoding, int raw)
+			  struct strbuf *sb, const char *output_encoding, bool raw)
 {
 	int i;
 	assert(display_notes_trees);

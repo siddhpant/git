@@ -313,7 +313,7 @@ void load_display_notes(struct display_notes_opt *opt);
  * You *must* call load_display_notes() before using this function.
  */
 void format_display_notes(const struct object_id *object_oid,
-			  struct strbuf *sb, const char *output_encoding, int raw);
+			  struct strbuf *sb, const char *output_encoding, bool raw);
 
 /*
  * Load the notes tree from each ref listed in 'refs'.  The output is
