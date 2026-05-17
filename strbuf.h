@@ -535,6 +535,10 @@ int strbuf_appendwholeline(struct strbuf *sb, FILE *file, int term);
  * descriptor.
  */
 int strbuf_getwholeline_fd(struct strbuf *sb, int fd, int term);
+int strbuf_getwholeline_fd_timeout(struct strbuf *sb, int fd, int term,
+				   int timeout_ms);
+int strbuf_getwholeline_fd_deadline(struct strbuf *sb, int fd, int term,
+				    uint64_t deadline_ns);
 
 /**
  * Set the buffer to the path of the current working directory.
