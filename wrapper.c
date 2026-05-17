@@ -9,6 +9,7 @@
 #include "parse.h"
 #include "gettext.h"
 #include "strbuf.h"
+#include "trace.h"
 #include "trace2.h"
 
 #ifdef HAVE_RTLGENRANDOM
@@ -220,26 +221,127 @@ static int handle_nonblock(int fd, short poll_events, int err)
 	return 1;
 }
 
-/*
- * xread() is the same a read(), but it automatically restarts read()
- * operations with a recoverable error (EAGAIN and EINTR). xread()
+static int wait_for_fd(int fd, short poll_events, int timeout_ms)
+{
+	struct pollfd pfd;
+
+	if (timeout_ms < 0) {
+		/* Negative timeout makes no sense. */
+		errno = EINVAL;
+		return -1;
+	}
+
+	pfd.fd = fd;
+	pfd.events = poll_events;
+
+	while(1) {
+		int ret = poll(&pfd, 1, timeout_ms);
+
+		if (ret <= 0) {
+			/* Retry if interrupted. */
+			if (ret < 0 && errno == EINTR)
+				continue;
+
+			/* Set errno if timeout happened. */
+			if (ret == 0)
+				errno = ETIMEDOUT;
+
+			return -1;
+		}
+
+		/* Invalid FD passed. */
+		if (pfd.revents & POLLNVAL) {
+			errno = EBADF;
+			return -1;
+		}
+
+		/* Some error happened. */
+		if (pfd.revents & POLLERR) {
+			errno = EIO;
+			return -1;
+		}
+
+		/* HangUp => We are ready to consume output till EOF. */
+		if (pfd.revents & (poll_events | POLLHUP))
+			return 0;
+	}
+}
+
+/**
+ * xread_timeout() is the same as read(), but it automatically restarts read()
+ * operations with a recoverable error (EAGAIN and EINTR). xread_timeout()
  * DOES NOT GUARANTEE that "len" bytes is read even if the data is available.
+ *
+ * Fails with ETIMEDOUT when no bytes become available within timeout_ms
+ * milliseconds. A zero timeout disables timeout handling, so reads can
+ * block until the file descriptor is readable. Negative timeouts are invalid.
  */
-ssize_t xread(int fd, void *buf, size_t len)
+ssize_t xread_timeout(int fd, void *buf, size_t len, int timeout_ms)
 {
 	ssize_t nr;
+
 	if (len > MAX_IO_SIZE)
 		len = MAX_IO_SIZE;
+
 	while (1) {
+		if (timeout_ms && wait_for_fd(fd, POLLIN, timeout_ms))
+			return -1;
+
 		nr = read(fd, buf, len);
+
 		if (nr < 0) {
 			if (errno == EINTR)
 				continue;
-			if (handle_nonblock(fd, POLLIN, errno))
-				continue;
+
+			if (timeout_ms) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					continue;
+			} else {
+				if (handle_nonblock(fd, POLLIN, errno))
+					continue;
+			}
 		}
+
 		return nr;
 	}
+}
+
+/* Non-timeout version for compatibility. */
+ssize_t xread(int fd, void *buf, size_t len)
+{
+	return xread_timeout(fd, buf, len, 0);
+}
+
+static int remaining_timeout_ms(uint64_t deadline_ns)
+{
+	uint64_t now, remaining_ns;
+
+	if (!deadline_ns)
+		return 0;
+
+	now = getnanotime();
+	if (now >= deadline_ns) {
+		errno = ETIMEDOUT;
+		return -1;
+	}
+
+	remaining_ns = deadline_ns - now;
+	return (int)((remaining_ns + 999999ULL) / 1000000ULL);
+}
+
+/* (deadline_ns = 0) disables the deadline and short-circuits to xread(). */
+ssize_t xread_deadline(int fd, void *buf, size_t len, uint64_t deadline_ns)
+{
+	int timeout_ms;
+
+	if (deadline_ns == 0)
+		return xread(fd, buf, len);
+
+	timeout_ms = remaining_timeout_ms(deadline_ns);
+	if (timeout_ms < 0)
+		return -1;
+
+	return xread_timeout(fd, buf, len, timeout_ms);
 }
 
 /*
@@ -283,13 +385,15 @@ ssize_t xpread(int fd, void *buf, size_t len, off_t offset)
 	}
 }
 
-ssize_t read_in_full(int fd, void *buf, size_t count)
+static ssize_t read_in_full_with(int fd, void *buf, size_t count,
+				 xread_cb_t xread_cb,
+				 void *cb_data)
 {
 	char *p = buf;
 	ssize_t total = 0;
 
 	while (count > 0) {
-		ssize_t loaded = xread(fd, p, count);
+		ssize_t loaded = xread_cb(fd, p, count, cb_data);
 		if (loaded < 0)
 			return -1;
 		if (loaded == 0)
@@ -300,6 +404,25 @@ ssize_t read_in_full(int fd, void *buf, size_t count)
 	}
 
 	return total;
+}
+
+ssize_t read_in_full_deadline(int fd, void *buf, size_t count,
+			      uint64_t deadline_ns)
+{
+	return read_in_full_with(fd, buf, count, xread_deadline_fn,
+				 &deadline_ns);
+}
+
+ssize_t read_in_full_timeout(int fd, void *buf, size_t count, int timeout_ms)
+{
+	return read_in_full_with(fd, buf, count, xread_timeout_fn,
+				 &timeout_ms);
+}
+
+/* Non-timeout version for compatibility. */
+ssize_t read_in_full(int fd, void *buf, size_t count)
+{
+	return read_in_full_timeout(fd, buf, count, 0);
 }
 
 ssize_t write_in_full(int fd, const void *buf, size_t count)

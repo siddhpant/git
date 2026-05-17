@@ -749,13 +749,15 @@ int strbuf_getline_nul(struct strbuf *sb, FILE *fp)
 	return strbuf_getdelim(sb, fp, '\0');
 }
 
-int strbuf_getwholeline_fd(struct strbuf *sb, int fd, int term)
+static int strbuf_getwholeline_fd_with(struct strbuf *sb, int fd, int term,
+				       xread_cb_t xread_cb,
+				       void *cb_data)
 {
 	strbuf_reset(sb);
 
 	while (1) {
 		char ch;
-		ssize_t len = xread(fd, &ch, 1);
+		ssize_t len = xread_cb(fd, &ch, 1, cb_data);
 		if (len <= 0)
 			return EOF;
 		strbuf_addch(sb, ch);
@@ -763,6 +765,26 @@ int strbuf_getwholeline_fd(struct strbuf *sb, int fd, int term)
 			break;
 	}
 	return 0;
+}
+
+int strbuf_getwholeline_fd_deadline(struct strbuf *sb, int fd, int term,
+				    uint64_t deadline_ns)
+{
+	return strbuf_getwholeline_fd_with(sb, fd, term, xread_deadline_fn,
+					   &deadline_ns);
+}
+
+int strbuf_getwholeline_fd_timeout(struct strbuf *sb, int fd, int term,
+				   int timeout_ms)
+{
+	return strbuf_getwholeline_fd_with(sb, fd, term, xread_timeout_fn,
+					   &timeout_ms);
+}
+
+/* Non-timeout version for compatibility. */
+int strbuf_getwholeline_fd(struct strbuf *sb, int fd, int term)
+{
+	return strbuf_getwholeline_fd_timeout(sb, fd, term, 0);
 }
 
 ssize_t strbuf_read_file(struct strbuf *sb, const char *path, size_t hint)

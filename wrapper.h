@@ -15,6 +15,8 @@ const char *mmap_os_err(void);
 void *xmmap_gently(void *start, size_t length, int prot, int flags, int fd, off_t offset);
 int xopen(const char *path, int flags, ...);
 ssize_t xread(int fd, void *buf, size_t len);
+ssize_t xread_timeout(int fd, void *buf, size_t len, int timeout_ms);
+ssize_t xread_deadline(int fd, void *buf, size_t len, uint64_t deadline_ns);
 ssize_t xwrite(int fd, const void *buf, size_t len);
 ssize_t xpread(int fd, void *buf, size_t len, off_t offset);
 int xdup(int fd);
@@ -44,8 +46,29 @@ int git_mkstemps_mode(char *pattern, int suffix_len, int mode);
 int git_mkstemp_mode(char *pattern, int mode);
 
 ssize_t read_in_full(int fd, void *buf, size_t count);
+ssize_t read_in_full_timeout(int fd, void *buf, size_t count, int timeout_ms);
+ssize_t read_in_full_deadline(int fd, void *buf, size_t count,
+			      uint64_t deadline_ns);
 ssize_t write_in_full(int fd, const void *buf, size_t count);
 ssize_t pread_in_full(int fd, void *buf, size_t count, off_t offset);
+
+typedef ssize_t xread_cb_t(int fd, void *buf, size_t len, const void *cb_data);
+
+static inline ssize_t xread_timeout_fn(int fd, void *buf, size_t len,
+				       const void *cb_data)
+{
+	const int *timeout_ms = cb_data;
+
+	return xread_timeout(fd, buf, len, *timeout_ms);
+}
+
+static inline ssize_t xread_deadline_fn(int fd, void *buf, size_t len,
+					const void *cb_data)
+{
+	const uint64_t *deadline_ns = cb_data;
+
+	return xread_deadline(fd, buf, len, *deadline_ns);
+}
 
 static inline ssize_t write_str_in_full(int fd, const char *str)
 {
