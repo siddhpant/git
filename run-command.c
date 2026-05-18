@@ -554,16 +554,63 @@ static inline void set_cloexec(int fd)
 		fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 }
 
-static int wait_or_whine(pid_t pid, const char *argv0, int in_signal)
+#define NS_IN_10MS 10000000ULL	/* 10 ms = 10^-2 s = 10^(9-2) ns = 10^7 ns */
+
+/* If timeout_ns == 0, no timeout happens (the timeout path is not taken). */
+static int wait_or_whine_timeout(pid_t pid, const char *argv0, int in_signal,
+				 uint64_t timeout_ns)
 {
 	int status, code = -1;
 	pid_t waiting;
 	int failed_errno = 0;
+	int flags = timeout_ns ? WNOHANG : 0;
+	bool timed_out = false;
+	uint64_t deadline_ns = getnanotime() + timeout_ns;
 
-	while ((waiting = waitpid(pid, &status, 0)) < 0 && errno == EINTR)
-		;	/* nothing */
+	while(1) {
+		uint64_t current_time_ns, remaining_ns;
+		waiting = waitpid(pid, &status, flags);
 
-	if (waiting < 0) {
+		/* Retry if interrupted. */
+		if (waiting < 0 && errno == EINTR)
+			continue;
+
+		/* Break if exited. */
+		if (waiting)
+			break;
+
+		/* If no timeout is specified, retry till it exits. */
+		if (!timeout_ns)
+			continue;
+
+		current_time_ns = getnanotime();
+
+		/* If we are past the deadline, set errno and break. */
+		if (deadline_ns <= current_time_ns) {
+			errno = ETIMEDOUT;
+			timed_out = true;
+			break;
+		}
+
+		/**
+		 * Retry after a sleep(min(remaining, default_chunk)).
+		 *
+		 * We don't blindly sleep for the entire remaining time because
+		 * the process can exit early.
+		 *
+		 * The subtraction of uint64_t is safe here since we have
+		 * already established that deadline_ns > current_time_ns.
+		 */
+		remaining_ns = deadline_ns - current_time_ns;
+		sleep_nanosec(remaining_ns < NS_IN_10MS ?
+			      remaining_ns : NS_IN_10MS);
+	}
+
+	if (timed_out) {
+		failed_errno = errno;
+		if (!in_signal)
+			error_errno("waitpid for %s timed out", argv0);
+	} else if (waiting < 0) {
 		failed_errno = errno;
 		if (!in_signal)
 			error_errno("waitpid for %s failed", argv0);
@@ -587,11 +634,26 @@ static int wait_or_whine(pid_t pid, const char *argv0, int in_signal)
 			error("waitpid is confused (%s)", argv0);
 	}
 
-	if (!in_signal)
+	/**
+	 * Signal handlers use the cleanup list while reaping children, so only
+	 * non-signal waiters (in_signal != 0) should update it.
+	 *
+	 * In case of a timeout, we keep the child registered since it is
+	 * actually not reaped so removing would be wrong. It is the
+	 * responsibility of the caller to detect the timeout and do cleanup,
+	 * like sending a kill signal using this function without a timeout.
+	 */
+	if (!in_signal && !timed_out)
 		clear_child_for_cleanup(pid);
 
 	errno = failed_errno;
 	return code;
+}
+
+/* Non-timeout wrapper for compatibility. */
+static int wait_or_whine(pid_t pid, const char *argv0, int in_signal)
+{
+	return wait_or_whine_timeout(pid, argv0, in_signal, 0);
 }
 
 static void trace_add_env(struct strbuf *dst, const char *const *deltaenv)
@@ -989,14 +1051,29 @@ end_of_spawn:
 	return 0;
 }
 
-int finish_command(struct child_process *cmd)
+/* See comment in the header file for executive summary. */
+int finish_command_with_timeout(struct child_process *cmd, uint64_t timeout_ns)
 {
-	int ret = wait_or_whine(cmd->pid, cmd->args.v[0], 0);
+	int ret = wait_or_whine_timeout(cmd->pid, cmd->args.v[0], 0,
+					timeout_ns);
+
+	if (timeout_ns && ret < 0 && errno == ETIMEDOUT) {
+		kill(cmd->pid, SIGKILL);
+		ret = wait_or_whine(cmd->pid, cmd->args.v[0], 0);
+	}
+
 	trace2_child_exit(cmd, ret);
 	child_process_clear(cmd);
 	invalidate_lstat_cache();
 	return ret;
 }
+
+/* Non-timeout wrapper for compatibility. */
+int finish_command(struct child_process *cmd)
+{
+	return finish_command_with_timeout(cmd, 0);
+}
+
 
 int finish_command_in_signal(struct child_process *cmd)
 {

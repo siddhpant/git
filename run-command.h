@@ -215,6 +215,18 @@ int start_command(struct child_process *);
  */
 int finish_command(struct child_process *);
 
+/**
+ * Wait for the completion of a sub-process that was started with
+ * start_command(), but uptil a given timeout duration timeout_ns.
+ *
+ * If it has not exited after timeout_ns, SIGKILL is sent to the process. We
+ * don't enforce a timeout for the second wait after sending the signal (as the
+ * process cleanup needs to happen), so it will block there.
+ *
+ * If timeout_ns == 0, no timeout happens and SIGKILL is not sent.
+ */
+int finish_command_with_timeout(struct child_process *cmd, uint64_t timeout_ns);
+
 int finish_command_in_signal(struct child_process *);
 
 /**
