@@ -130,6 +130,7 @@ int warn_on_fopen_errors(const char *path);
 int open_nofollow(const char *path, int flags);
 
 void sleep_millisec(int millisec);
+int sleep_nanosec(uint64_t nanosec);
 
 enum {
 	/*

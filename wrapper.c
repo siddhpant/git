@@ -10,6 +10,7 @@
 #include "gettext.h"
 #include "strbuf.h"
 #include "trace2.h"
+#include <time.h>
 
 #ifdef HAVE_RTLGENRANDOM
 /* This is required to get access to RtlGenRandom. */
@@ -707,6 +708,54 @@ void sleep_millisec(int millisec)
 {
 	poll(NULL, 0, millisec);
 }
+
+#ifdef GIT_WINDOWS_NATIVE
+/* No nanosleep() on Windows, so fall-back to using sleep_millisec(). */
+int sleep_nanosec(uint64_t nanosec)
+{
+	uint64_t ns_in_1ms = 1000000ULL;	/* 1 ms = 10^6 ns */
+
+	uint64_t millisec = nanosec / ns_in_1ms;
+	if (nanosec % ns_in_1ms)
+		millisec++;
+
+	/* Chunked sleep if we can't represent in integer. */
+	while (millisec > INT_MAX) {
+		sleep_millisec(INT_MAX);
+		millisec -= INT_MAX;
+	}
+
+	sleep_millisec((int)millisec);
+
+	return 0;
+}
+#else
+/* Not Windows, so use the more exact nanosleep(). */
+int sleep_nanosec(uint64_t nanosec)
+{
+	int ret;
+	struct timespec duration, remaining;
+
+	/* Construct the duration by dividing the given total (1s = 10^9ns). */
+	duration.tv_sec = nanosec / 1000000000ULL;
+	duration.tv_nsec = nanosec % 1000000000ULL;
+
+	while(1) {
+		ret = nanosleep(&duration, &remaining);
+
+		/* Continue sleeping if interrupted. */
+		if (ret == -1 && errno == EINTR) {
+			duration = remaining;
+			continue;
+		}
+
+		/* Either success or an error. */
+		break;
+	}
+
+	return ret;
+}
+#endif  /* GIT_WINDOWS_NATIVE */
 
 int xgethostname(char *buf, size_t len)
 {
