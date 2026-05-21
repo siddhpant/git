@@ -2250,7 +2250,7 @@ int mingw_execvp(const char *cmd, char *const *argv)
 
 int mingw_kill(pid_t pid, int sig)
 {
-	if (pid > 0 && sig == SIGTERM) {
+	if (pid > 0 && (sig == SIGTERM || sig == SIGKILL)) {
 		HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
 
 		if (TerminateProcess(h, -1)) {
