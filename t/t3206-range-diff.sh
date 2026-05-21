@@ -6,6 +6,7 @@ GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
 . ./test-lib.sh
+. "$TEST_DIRECTORY"/lib-notes.sh
 
 # Note that because of the range-diff's heuristics, test_commit does more
 # harm than good.  We need some real history.
@@ -690,6 +691,37 @@ test_expect_success 'range-diff with --notes=custom does not show default notes'
 	grep "## Notes (custom) ##" actual
 '
 
+test_expect_success 'range-diff with --external-notes' '
+	topic_oid=$(git rev-parse topic) &&
+	unmodified_oid=$(git rev-parse unmodified) &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		range-diff --no-color --external-notes \
+		main..topic main..unmodified >actual &&
+	test_grep "## Notes (external) ##" actual &&
+	test_grep "^    -    $topic_oid$" actual &&
+	test_grep "^    +    $unmodified_oid$" actual &&
+	! grep "## Notes ##" actual
+'
+
+test_expect_success 'range-diff with disabled external notes' '
+	test_when_finished "git notes remove topic unmodified || :" &&
+	git notes add -m "topic note" topic &&
+	git notes add -m "unmodified note" unmodified &&
+	TEST_EXTERNAL_NOTES_PREFIX=range-diff-external-notes \
+		git -c notes.externalCommand="$external_notes_command" \
+		range-diff --no-color --external-notes --no-external-notes \
+		main..topic main..unmodified >actual &&
+	cat >expect <<-EOF &&
+	1:  $(test_oid t1) = 1:  $(test_oid u1) s/5/A/
+	2:  $(test_oid t2) = 2:  $(test_oid u2) s/4/A/
+	3:  $(test_oid t3) = 3:  $(test_oid u3) s/11/B/
+	4:  $(test_oid t4) = 4:  $(test_oid u4) s/12/B/
+	EOF
+	test_cmp expect actual &&
+	test_path_is_missing range-diff-external-notes-starts
+'
+
 test_expect_success 'format-patch --range-diff does not compare notes by default' '
 	test_when_finished "git notes remove topic unmodified || :" &&
 	git notes add -m "topic note" topic &&
@@ -778,6 +810,42 @@ test_expect_success 'format-patch --range-diff with --notes' '
 	EOF
 	sed "/@@ Commit message/,/@@ file: A/!d" 0000-* >actual &&
 	test_cmp expect actual
+'
+
+test_expect_success 'format-patch --range-diff with --external-notes' '
+	topic_oid=$(git rev-parse topic) &&
+	unmodified_oid=$(git rev-parse unmodified) &&
+	test_when_finished "rm -f 000?-*" &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		format-patch --external-notes --cover-letter --range-diff=$prev \
+		main..unmodified >actual &&
+	test_line_count = 5 actual &&
+	test_grep "^Range-diff:$" 0000-* &&
+	test_grep "## Notes (external) ##" 0000-* &&
+	test_grep "^    -    $topic_oid$" 0000-* &&
+	test_grep "^    +    $unmodified_oid$" 0000-* &&
+	! grep "## Notes ##" 0000-*
+'
+
+test_expect_success 'format-patch --range-diff with disabled external notes' '
+	test_when_finished "git notes remove topic unmodified || :" &&
+	git notes add -m "topic note" topic &&
+	git notes add -m "unmodified note" unmodified &&
+	test_when_finished "rm -f 000?-*" &&
+	TEST_EXTERNAL_NOTES_PREFIX=range-diff-external-notes \
+		git -c notes.externalCommand="$external_notes_command" \
+		format-patch --external-notes --no-external-notes \
+		--cover-letter --range-diff=$prev main..unmodified >actual &&
+	test_line_count = 5 actual &&
+	test_grep "^Range-diff:$" 0000-* &&
+	grep "= 1: .* s/5/A" 0000-* &&
+	grep "= 2: .* s/4/A" 0000-* &&
+	grep "= 3: .* s/11/B" 0000-* &&
+	grep "= 4: .* s/12/B" 0000-* &&
+	! grep "Notes" 0000-* &&
+	! grep "note" 0000-* &&
+	test_path_is_missing range-diff-external-notes-starts
 '
 
 test_expect_success 'format-patch --range-diff with format.notes config' '

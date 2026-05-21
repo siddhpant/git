@@ -15,6 +15,7 @@ GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
 . ./test-lib.sh
+. "$TEST_DIRECTORY"/lib-notes.sh
 
 check_describe () {
 	indir= &&
@@ -864,6 +865,22 @@ test_expect_success 'format-rev with %N (note)' '
 	HEAD
 	HEAD~
 	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'format-rev with %N uses external notes' '
+	commit=$(git -C repo-format rev-parse HEAD) &&
+	rm -f repo-format/format-rev-external-notes-starts \
+		repo-format/format-rev-external-notes-requests &&
+	printf "%s\n" "$commit" >input &&
+	printf "%s\n\n" "$commit" >expect &&
+	TEST_EXTERNAL_NOTES_PREFIX=format-rev-external-notes \
+	git -C repo-format -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		format-rev --stdin-mode=text --format="tformat:%N" \
+		<input >actual &&
+	test_line_count = 1 repo-format/format-rev-external-notes-starts &&
+	test_cmp input repo-format/format-rev-external-notes-requests &&
 	test_cmp expect actual
 '
 

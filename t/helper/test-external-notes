@@ -1,0 +1,64 @@
+#!/bin/sh
+
+prefix=${TEST_EXTERNAL_NOTES_PREFIX:-external-notes}
+response=${TEST_EXTERNAL_NOTES_RESPONSE:-ok}
+line_ending=${TEST_EXTERNAL_NOTES_LINE_ENDING:-lf}
+exit_after_response=${TEST_EXTERNAL_NOTES_EXIT_AFTER_RESPONSE:-}
+exit_delay=${TEST_EXTERNAL_NOTES_EXIT_DELAY:-}
+delay=${TEST_EXTERNAL_NOTES_DELAY:-}
+char_delay=${TEST_EXTERNAL_NOTES_CHAR_DELAY:-}
+ignore_term=${TEST_EXTERNAL_NOTES_IGNORE_TERM:-}
+
+newline='\n'
+case "$line_ending" in
+crlf)
+	newline='\r\n'
+	;;
+none)
+	newline=
+	;;
+esac
+
+echo start >>"$prefix-starts"
+
+test "$ignore_term" = true && trap '' TERM
+
+emit_output() {
+	if test -n "$char_delay"
+	then
+		LC_ALL=C
+		payload=$(printf "$@"; printf .)
+		payload=${payload%.}
+
+		while test -n "$payload"
+		do
+			char=${payload%"${payload#?}"}
+			printf '%s' "$char" || return 1
+			payload=${payload#?}
+			sleep "$char_delay" || return 1
+		done
+	else
+		printf "$@"
+	fi
+}
+
+while IFS= read -r commit; do
+	if test "${TEST_EXTERNAL_NOTES_BODY+x}" = x
+	then
+		note=$TEST_EXTERNAL_NOTES_BODY
+	else
+		note=$commit
+	fi
+	printf "%s\n" "$commit" >>"$prefix-requests"
+	test -z "$delay" || sleep "$delay"
+	if test "$response" = missing
+	then
+		emit_output "%s missing%b" "$commit" "$newline"
+	else
+		emit_output "%s ok %d%b%s%b" \
+			"$commit" "${#note}" "$newline" "$note" "$newline"
+	fi
+	test "$exit_after_response" = true && break
+done
+
+test -z "$exit_delay" || sleep "$exit_delay"

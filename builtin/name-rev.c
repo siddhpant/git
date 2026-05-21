@@ -277,6 +277,7 @@ struct name_ref_data {
 struct pretty_format {
 	struct pretty_print_context ctx;
 	struct userformat_want want;
+	bool show_external_notes;
 };
 
 enum command_type {
@@ -525,9 +526,9 @@ static const char *get_format_rev(const struct commit *c,
 	if (format_ctx->want.notes) {
 		struct strbuf notebuf = STRBUF_INIT;
 
-		format_display_notes(&c->object.oid, &notebuf,
-				     get_log_output_encoding(),
-				     format_ctx->ctx.fmt == CMIT_FMT_USERFORMAT);
+		format_display_notes(c, &notebuf, get_log_output_encoding(),
+				     format_ctx->ctx.fmt == CMIT_FMT_USERFORMAT,
+				     format_ctx->show_external_notes);
 		format_ctx->ctx.notes_message = strbuf_detach(&notebuf, NULL);
 	}
 
@@ -878,6 +879,8 @@ int cmd_format_rev(int argc,
 			enable_ref_display_notes(&format_notes_opt,
 						 &ignore_show_notes,
 						 n->string);
+		format_pp.show_external_notes =
+			display_notes_use_external(&format_notes_opt);
 		load_display_notes(&format_notes_opt);
 	}
 

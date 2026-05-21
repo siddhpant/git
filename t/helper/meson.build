@@ -35,6 +35,7 @@ test_tool_sources = [
   'test-mergesort.c',
   'test-mktemp.c',
   'test-name-hash.c',
+  'test-notes-external-config-reset.c',
   'test-online-cpus.c',
   'test-pack-deltas.c',
   'test-pack-mtimes.c',

@@ -6,6 +6,7 @@
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
+#include "notes-external.h"
 #include "object-name.h"
 #include "object-file.h"
 #include "odb.h"
@@ -2583,18 +2584,40 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (skip_prefix(arg, "--show-notes=", &optarg) ||
 		   skip_prefix(arg, "--notes=", &optarg)) {
 		if (starts_with(arg, "--show-notes=") &&
-		    revs->notes_opt.use_default_notes < 0)
+		    (revs->notes_opt.use_default_notes < 0 ||
+		     revs->notes_opt.default_notes_suppressed_by_external)) {
 			revs->notes_opt.use_default_notes = 1;
+			revs->notes_opt.default_notes_suppressed_by_external = 0;
+		}
 		enable_ref_display_notes(&revs->notes_opt, &revs->show_notes, optarg);
 		revs->show_notes_given = 1;
 	} else if (!strcmp(arg, "--no-notes")) {
 		disable_display_notes(&revs->notes_opt, &revs->show_notes);
 		revs->show_notes_given = 1;
+	} else if (!strcmp(arg, "--external-notes")) {
+		revs->notes_opt.use_external_notes = 1;
+		revs->show_notes = 1;
+		revs->show_notes_given = 1;
+		/*
+		 * `--external-notes` names a note source on its own. If the
+		 * default notes ref is still undecided, settle it to "off" so
+		 * this option does not also trigger the "no explicit notes
+		 * refs" fallback. A later use of `--notes` or the deprecated
+		 * `--show-notes=<ref>` can still turn the default ref on.
+		 */
+		if (revs->notes_opt.use_default_notes < 0) {
+			revs->notes_opt.use_default_notes = 0;
+			revs->notes_opt.default_notes_suppressed_by_external = 1;
+		}
+	} else if (!strcmp(arg, "--no-external-notes")) {
+		revs->notes_opt.use_external_notes = 0;
 	} else if (!strcmp(arg, "--standard-notes")) {
 		revs->show_notes_given = 1;
 		revs->notes_opt.use_default_notes = 1;
+		revs->notes_opt.default_notes_suppressed_by_external = 0;
 	} else if (!strcmp(arg, "--no-standard-notes")) {
 		revs->notes_opt.use_default_notes = 0;
+		revs->notes_opt.default_notes_suppressed_by_external = 0;
 	} else if (!strcmp(arg, "--oneline")) {
 		revs->verbose_header = 1;
 		get_commit_format("oneline", revs);
@@ -4105,9 +4128,14 @@ static int commit_match(struct commit *commit, struct rev_info *opt)
 
 	/* Append "fake" message parts as needed */
 	if (opt->show_notes) {
+		const struct display_notes_opt *notes_opt = &opt->notes_opt;
+
 		if (!buf.len)
 			strbuf_addstr(&buf, message);
-		format_display_notes(&commit->object.oid, &buf, encoding, true);
+
+		format_display_notes(commit, &buf, encoding, true,
+				     (display_notes_use_external(notes_opt)
+				      && external_notes_for_grep_enabled()));
 	}
 
 	/*

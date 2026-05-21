@@ -93,6 +93,15 @@ being displayed. Examples: "`--notes=foo`" will show only notes from
 	"`--notes --notes=foo --no-notes --notes=bar`" will only show notes
 	from `refs/notes/bar`.
 
+`--external-notes`::
+`--no-external-notes`::
+	Invoke or do not invoke `notes.externalCommand` to obtain external
+	notes. Like `--notes=<ref>`, `--external-notes` names an explicit
+	note source and by itself does not include the default notes refs.
+	Use `--external-notes --notes` to include the default notes refs
+	too, or combine `--external-notes` with `--notes=<ref>` to include
+	external notes with specific notes refs.
+
 `--show-notes-by-default`::
 	Show the default notes unless options for displaying specific
 	notes are given.

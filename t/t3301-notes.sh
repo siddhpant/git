@@ -6,6 +6,7 @@
 test_description='Test commit notes'
 
 . ./test-lib.sh
+. "$TEST_DIRECTORY"/lib-notes.sh
 
 write_script fake_editor <<\EOF
 echo "$MSG" >"$1"
@@ -15,6 +16,11 @@ GIT_EDITOR=./fake_editor
 export GIT_EDITOR
 
 indent="    "
+
+run_with_limited_time () (
+	{ set +x; } 2>/dev/null
+	"$PERL_PATH" -e 'alarm shift; exec @ARGV' -- "$@"
+)
 
 test_expect_success 'cannot annotate non-existing HEAD' '
 	test_must_fail env MSG=3 git notes add
@@ -907,6 +913,437 @@ test_expect_success 'displayed notes are used for grep matching' '
 	test_grep "^commit $commit$" actual &&
 	git log --no-notes --grep="order test" -1 >actual &&
 	test_must_be_empty actual
+'
+
+test_expect_success 'notes.externalCommand shows external notes from protected config' '
+	commit=$(git rev-parse HEAD) &&
+	parent=$(git rev-parse HEAD^) &&
+	rm -f external-notes-starts external-notes-requests &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log -2 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	{
+		printf "%s\n" "$commit" &&
+		printf "%s\n" "$parent"
+	} >expect-requests &&
+	test_cmp expect-requests external-notes-requests &&
+	test_grep "Notes (external):" actual &&
+	test_grep "^    $commit$" actual &&
+	test_grep "^    $parent$" actual
+'
+
+test_expect_success PERL,EXECKEEPSPID 'notes.externalCommand terminates helper during exit cleanup' '
+	commit=$(git rev-parse HEAD) &&
+	test_env TEST_EXTERNAL_NOTES_EXIT_DELAY=10 \
+		run_with_limited_time 2 \
+		git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --external-notes -1 >actual &&
+	test_grep "^Notes (external):$" actual &&
+	test_grep "^    $commit$" actual
+'
+
+test_expect_success 'notes.externalCommandName labels external notes' '
+	commit=$(git rev-parse HEAD) &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		-c notes.externalCommandName=commit-id log -1 >actual &&
+	test_grep "Notes (commit-id):" actual &&
+	test_grep "^    $commit$" actual
+'
+
+test_expect_success 'notes.externalCommandName is rendered literally' '
+	commit=$(git rev-parse HEAD) &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		-c notes.externalCommandName=refs/notes/commits \
+		log --external-notes -1 >actual &&
+	test_grep "^Notes (refs/notes/commits):$" actual &&
+	! grep "^Notes:$" actual &&
+	test_grep "^    $commit$" actual
+'
+
+test_expect_success 'notes.externalCommandTimeoutMs rejects negative values' '
+	test_must_fail git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandTimeoutMs=-1 log -1 2>err &&
+	test_grep "notes.externalCommandTimeoutMs must be non-negative" err
+'
+
+test_expect_success 'notes.externalCommandTimeoutMs times out delayed response' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_DELAY=1 \
+		git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandTimeoutMs=1 \
+		log -1 >actual 2>err &&
+	test_cmp expect actual &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
+'
+
+test_expect_success 'notes.externalCommandTimeoutMs applies to whole response' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_BODY=x \
+		 TEST_EXTERNAL_NOTES_CHAR_DELAY=0.02 \
+		git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandTimeoutMs=50 \
+		log -1 >actual 2>err &&
+	test_cmp expect actual &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
+'
+
+test_expect_success PERL,EXECKEEPSPID 'notes.externalCommandTimeoutMs terminates timed-out helper' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_DELAY=10 \
+		run_with_limited_time 2 \
+		git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandTimeoutMs=1 \
+		log -1 >actual 2>err &&
+	test_cmp expect actual &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
+'
+
+test_expect_success PERL,EXECKEEPSPID 'notes.externalCommandTimeoutMs force-kills timed-out helper' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_DELAY=10 \
+		 TEST_EXTERNAL_NOTES_IGNORE_TERM=true \
+		run_with_limited_time 2 \
+		git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandTimeoutMs=1 \
+		log -1 >actual 2>err &&
+	test_cmp expect actual &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
+'
+
+test_expect_success 'notes.externalCommandTimeoutMs=0 disables timeout' '
+	commit=$(git rev-parse HEAD) &&
+	test_env TEST_EXTERNAL_NOTES_DELAY=1 \
+		git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandTimeoutMs=0 \
+		log --external-notes -1 >actual &&
+	test_grep "^Notes (external):$" actual &&
+	test_grep "^    $commit$" actual
+'
+
+test_expect_success 'notes.externalCommand handles CRLF note bodies' '
+	body=$(printf "A\r\nB") &&
+	test_env TEST_EXTERNAL_NOTES_BODY="$body" \
+		git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --external-notes -1 >actual &&
+	test_grep "^Notes (external):$" actual &&
+	test_grep "^    B$" actual
+'
+
+test_expect_success 'notes.externalCommand accepts CRLF missing response' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_RESPONSE=missing \
+		 TEST_EXTERNAL_NOTES_LINE_ENDING=crlf \
+		git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log -1 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'notes.externalCommand rejects unterminated missing response' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_RESPONSE=missing \
+		 TEST_EXTERNAL_NOTES_LINE_ENDING=none \
+		 TEST_EXTERNAL_NOTES_EXIT_AFTER_RESPONSE=true \
+		git -c notes.externalCommand="$external_notes_command" \
+		log -1 >actual 2>err &&
+	test_cmp expect actual &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
+'
+
+test_expect_success PERL,EXECKEEPSPID 'notes.externalCommand rejects unterminated live response without deadlock' '
+	git log -1 >expect &&
+	test_env TEST_EXTERNAL_NOTES_RESPONSE=missing \
+		 TEST_EXTERNAL_NOTES_LINE_ENDING=none \
+		run_with_limited_time 2 \
+		git -c notes.externalCommand="$external_notes_command" \
+		log -1 >actual 2>err &&
+	test_cmp expect actual &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
+'
+
+test_expect_success 'notes.externalCommand accepts CRLF protocol lines' '
+	commit=$(git rev-parse HEAD) &&
+	test_env TEST_EXTERNAL_NOTES_LINE_ENDING=crlf \
+		git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --external-notes -1 >actual &&
+	test_grep "^Notes (external):$" actual &&
+	test_grep "^    $commit$" actual
+'
+
+test_expect_success 'notes.externalCommand missing response shows no external notes' '
+	write_script external-notes-missing <<-\EOF &&
+	while IFS= read -r commit
+	do
+		printf "%s missing\n" "$commit"
+	done
+	EOF
+	git log -1 >expect &&
+	git -c notes.externalCommand=./external-notes-missing log -1 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'notes.externalCommand empty note shows no external notes' '
+	write_script external-notes-empty <<-\EOF &&
+	while IFS= read -r commit
+	do
+		printf "%s ok 0\n\n" "$commit"
+	done
+	EOF
+	git log -1 >expect &&
+	git -c notes.externalCommand=./external-notes-empty log -1 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'notes.externalCommand rejects invalid note lengths' '
+	write_script external-notes-invalid-length <<-\EOF &&
+	while IFS= read -r commit
+	do
+		printf "%s ok %s\n" "$commit" "$1"
+	done
+	EOF
+	git log -2 >expect &&
+	for bad_length in -1 +1 1x x
+	do
+		git -c notes.externalCommand="./external-notes-invalid-length $bad_length" \
+			log -2 >actual 2>err &&
+		test_cmp expect actual &&
+		test_grep "notes.externalCommand failed" err &&
+		test_line_count = 1 err || return 1
+	done
+'
+
+test_expect_success 'notes.externalCommand is suppressed by --no-notes' '
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" log --no-notes -1 >actual &&
+	test_path_is_missing external-notes-starts &&
+	! grep "Notes (external):" actual
+'
+
+test_expect_success 'notes.externalCommand is suppressed by --no-external-notes' '
+	rm -f external-notes-starts &&
+	git log -1 >expect &&
+	git -c notes.externalCommand="$external_notes_command" \
+		log --no-external-notes -1 >actual &&
+	test_cmp expect actual &&
+	test_path_is_missing external-notes-starts
+'
+
+test_expect_success 'notes.externalCommand combines with explicit notes ref' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --notes=other --external-notes -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "Notes (other):" actual &&
+	test_grep "^    other note$" actual &&
+	test_grep "Notes (external):" actual &&
+	test_grep "^    $commit$" actual &&
+	! grep "^    order test$" actual
+'
+
+test_expect_success '--show-notes=ref remains additive after --external-notes' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --external-notes --show-notes=other -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "^Notes:$" actual &&
+	test_grep "^    order test$" actual &&
+	test_grep "^Notes (other):$" actual &&
+	test_grep "^    other note$" actual &&
+	test_grep "^Notes (external):$" actual &&
+	test_grep "^    $commit$" actual
+'
+
+test_expect_success 'notes.externalCommand can be enabled without default notes refs' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --external-notes -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "Notes (external):" actual &&
+	test_grep "^    $commit$" actual &&
+	! grep "^    order test$" actual &&
+	! grep "^    other note$" actual
+'
+
+test_expect_success 'notes.externalCommand combines with default notes refs' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --external-notes --notes -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "Notes:" actual &&
+	test_grep "^    order test$" actual &&
+	test_grep "Notes (external):" actual &&
+	test_grep "^    $commit$" actual &&
+	! grep "^    other note$" actual
+'
+
+test_expect_success 'notes.externalCommand obeys last --external-notes option' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git log --no-notes -1 >expect &&
+	git -c notes.externalCommand="$external_notes_command" \
+		log --external-notes --no-external-notes -1 >actual &&
+	test_cmp expect actual &&
+	test_path_is_missing external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log --notes=other --no-external-notes --external-notes -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "Notes (other):" actual &&
+	test_grep "^    other note$" actual &&
+	test_grep "Notes (external):" actual &&
+	test_grep "^    $commit$" actual &&
+	! grep "^    order test$" actual
+'
+
+test_expect_success 'notes.externalCommand honors raw notes formatting' '
+	commit=$(git rev-parse HEAD) &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		show -s --format=%N >actual &&
+	test_grep "^$commit$" actual &&
+	! grep "Notes (external):" actual
+'
+
+test_expect_success 'format-patch --external-notes includes external notes only' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		format-patch --external-notes -1 --stdout >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "^Notes (external):" actual &&
+	test_grep "^    $commit$" actual &&
+	! grep "^    order test$" actual
+'
+
+test_expect_success 'notes.externalCommand is not used for grep matching' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		log --grep="$commit" >actual &&
+	test_must_be_empty actual &&
+	test_path_is_missing external-notes-starts
+'
+
+test_expect_success 'notes.externalCommandForGrep includes external notes in grep matching' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		-c notes.externalCommandForGrep=true \
+		log --grep="$commit" -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "Notes (external):" actual
+'
+
+test_expect_success 'notes.externalCommandForGrep does not search hidden notes' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandForGrep=true \
+		log --oneline --grep="$commit" -1 >actual &&
+	test_must_be_empty actual &&
+	test_path_is_missing external-notes-starts
+'
+
+test_expect_success 'notes.externalCommandForGrep honors --no-external-notes' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		-c notes.externalCommandForGrep=true \
+		log --no-external-notes --grep="$commit" -1 >actual &&
+	test_must_be_empty actual &&
+	test_path_is_missing external-notes-starts
+'
+
+test_expect_success 'notes.externalCommandForGrep combines with explicit notes ref' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		-c notes.externalCommandForGrep=true \
+		log --notes=other --external-notes --grep="$commit" -1 >actual &&
+	test_line_count = 1 external-notes-starts &&
+	test_grep "Notes (external):" actual &&
+	test_grep "Notes (other):" actual &&
+	! grep "^    order test$" actual
+'
+
+test_expect_success 'notes.externalCommandForGrep is ignored from local config' '
+	commit=$(git rev-parse HEAD) &&
+	rm -f external-notes-starts &&
+	test_config notes.externalCommandForGrep true &&
+	git -c notes.externalCommand="$external_notes_command" \
+		log --grep="$commit" >actual &&
+	test_must_be_empty actual &&
+	test_path_is_missing external-notes-starts
+'
+
+test_expect_success 'notes.externalCommand is not used with explicit notes ref' '
+	rm -f external-notes-starts &&
+	git -c notes.externalCommand="$external_notes_command" log --notes=other -1 >actual &&
+	test_path_is_missing external-notes-starts &&
+	! grep "Notes (external):" actual
+'
+
+test_expect_success 'notes.externalCommand is ignored from local config' '
+	rm -f external-notes-starts &&
+	test_config notes.externalCommand "$external_notes_command" &&
+	git log -1 >actual &&
+	test_path_is_missing external-notes-starts &&
+	! grep "Notes (external):" actual
+'
+
+test_expect_success 'notes.externalCommandName is ignored from local config' '
+	test_config notes.externalCommandName local &&
+	git -c notes.externalCommand="$external_notes_command" \
+		$external_notes_command_timeout_config \
+		log -1 >actual &&
+	test_grep "Notes (external):" actual &&
+	! grep "Notes (local):" actual
+'
+
+test_expect_success 'reset_external_notes_command clears cached helper config' '
+	test-tool notes-external-config-reset >actual &&
+	cat >expect <<-\EOF &&
+	configured=0
+	name=external
+	timeout_ms=100
+	grep=0
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success 'notes.externalCommand warning is shown once' '
+	write_script external-notes-fail <<-\EOF &&
+	while IFS= read -r commit
+	do
+		printf "%s-mismatch missing\n" "$commit"
+	done
+	EOF
+	git -c notes.externalCommand=./external-notes-fail log -2 >actual 2>err &&
+	test_grep "notes.externalCommand failed" err &&
+	test_line_count = 1 err
 '
 
 test_expect_success 'Allow notes on non-commits (trees, blobs, tags)' '
