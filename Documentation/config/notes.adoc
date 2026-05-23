@@ -34,6 +34,65 @@ The effective value of `core.notesRef` (possibly overridden by
 `GIT_NOTES_REF`) is also implicitly added to the list of refs to be
 displayed.
 
+`notes.externalCommand`::
+	Command to invoke as a long-lived helper when showing commit messages
+	with the `git log` family of commands. Git sends one commit object ID
+	per request on the command's standard input:
++
+------------
+<hex-commit-id>
+------------
++
+For each request, the helper must respond on its standard output with either
+`<hex-commit-id> missing` followed by a newline, or `<hex-commit-id> ok <n>`
+followed by a newline and exactly `<n>` bytes of UTF-8 note text followed by a
+newline. The helper must respond to each request as it is received; Git does
+not send all commit object IDs before reading responses. Empty note text is not
+displayed. External notes are only used while formatting output by default; see
+`notes.externalCommandForGrep` to include them when matching commits.
++
+If Git cannot start or communicate with the helper, or the helper sends an
+invalid response, Git warns once and disables it for the rest of the Git run.
+The process is closed using SIGTERM, so the helper should not trap it.
++
+This setting is only respected in protected configuration (see
+linkgit:git-config[1]). This prevents untrusted repositories from running
+arbitrary commands when notes are displayed.
++
+This setting does not take effect when:
++
+--
+* the value is empty;
+* `--no-notes` is given;
+* `--no-external-notes` is given; or
+* `--notes=<ref>` is given by itself without `--external-notes` or `--notes`.
+--
+
+`notes.externalCommandName`::
+	Name to use in the `Notes (<name>):` header for notes returned by
+	`notes.externalCommand`. Defaults to `external`. This setting is only
+	respected in protected configuration.
+
+`notes.externalCommandTimeoutMs`::
+	Number of milliseconds to wait when reading each response from
+	`notes.externalCommand`. Defaults to `100`. If the command does not
+	produce the expected response in time, Git warns once and disables it
+	for the rest of the command. A value of `0` disables timeout handling,
+	so reads can block until the command writes output or exits. This
+	setting is only	respected in protected configuration.
+
+`notes.externalCommandForGrep`::
+	Boolean indicating whether notes returned by `notes.externalCommand`
+	are included when matching commits with `--grep`, wherever notes would
+	normally participate in grep matching. Defaults to false. This does
+	not make hidden notes searchable in formats such as `--oneline` or
+	`--pretty=%s`; use `--notes` or `--external-notes` if those formats
+	should search notes too. When enabled, revision traversal may invoke
+	the external command for many commits that are not ultimately
+	displayed, which can be expensive for slow commands. The note output
+	can also change which commits match. This setting is only respected in
+	protected configuration.
+
 `notes.rewrite.<command>`::
 	When rewriting commits with _<command>_ (currently `amend` or
 	`rebase`), if this variable is `false`, git will not copy

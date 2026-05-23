@@ -6,6 +6,8 @@
 struct object_id;
 struct repository;
 struct strbuf;
+struct commit;
+struct external_notes_state;
 
 /*
  * Function type for combining two notes annotating the same object.
@@ -265,10 +267,30 @@ struct display_notes_opt {
 	int use_default_notes;
 
 	/*
+	 * Less than `0` is "unset", which means external notes are shown iff
+	 * the default notes are shown. Otherwise, treat it like a boolean.
+	 */
+	int use_external_notes;
+
+	/*
+	 * Tracks the synthetic "default notes off" state introduced by
+	 * `--external-notes`, so a later deprecated `--show-notes=<ref>`
+	 * can still preserve its historical additive behavior without
+	 * overriding an explicit `--no-standard-notes`.
+	 */
+	int default_notes_suppressed_by_external;
+
+	/*
 	 * A list of globs (in the same style as notes.displayRef) where
 	 * notes should be loaded from.
 	 */
 	struct string_list extra_notes_refs;
+
+	/*
+	 * State for notes.externalCommand. This is initialized lazily by
+	 * load_display_notes() when external notes may be used.
+	 */
+	struct external_notes_state *external_notes_state;
 };
 
 /*
@@ -304,16 +326,21 @@ void disable_display_notes(struct display_notes_opt *opt, int *show_notes);
 void load_display_notes(struct display_notes_opt *opt);
 
 /*
- * Append notes for the given 'object_sha1' from all trees set up by
+ * Append notes for the given commit from all trees set up by
  * load_display_notes() to 'sb'.
  *
  * If 'raw' is false the note will be indented by 4 places and
  * a 'Notes (refname):' header added.
  *
+ * If 'external_state' is not NULL, notes.externalCommand will be used to
+ * append the note from an external source.
+ *
  * You *must* call load_display_notes() before using this function.
  */
-void format_display_notes(const struct object_id *object_oid,
-			  struct strbuf *sb, const char *output_encoding, bool raw);
+void format_display_notes(const struct commit *commit,
+			  struct strbuf *sb, const char *output_encoding,
+			  bool raw,
+			  struct external_notes_state *external_state);
 
 /*
  * Load the notes tree from each ref listed in 'refs'.  The output is

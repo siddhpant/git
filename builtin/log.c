@@ -1337,9 +1337,24 @@ static void get_notes_args(struct strvec *arg, struct rev_info *rev)
 		   (rev->notes_opt.use_default_notes == -1 &&
 		    !rev->notes_opt.extra_notes_refs.nr)) {
 		strvec_push(arg, "--notes");
-	} else {
+	} else if (rev->notes_opt.extra_notes_refs.nr) {
 		for_each_string_list(&rev->notes_opt.extra_notes_refs, get_notes_refs, arg);
+	} else if (rev->notes_opt.use_external_notes <= 0) {
+		/*
+		 * rev->show_notes can stay set after
+		 * --external-notes --no-external-notes.
+		 *
+		 * Since range-diff's child log starts with
+		 * --show-notes-by-default, explicitly suppress
+		 * notes when no notes source remains.
+		 */
+		strvec_push(arg, "--no-notes");
 	}
+
+	if (rev->notes_opt.use_external_notes > 0)
+		strvec_push(arg, "--external-notes");
+	else if (rev->notes_opt.use_external_notes == 0)
+		strvec_push(arg, "--no-external-notes");
 }
 
 static void generate_shortlog_cover_letter(struct shortlog *log,

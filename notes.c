@@ -3,9 +3,12 @@
 
 #include "git-compat-util.h"
 #include "config.h"
+#include "commit.h"
 #include "environment.h"
+#include "gettext.h"
 #include "hex.h"
 #include "notes.h"
+#include "notes-external.h"
 #include "object-file.h"
 #include "object-name.h"
 #include "odb.h"
@@ -983,17 +986,58 @@ void string_list_add_refs_from_colon_sep(struct string_list *list,
 	free(globs_copy);
 }
 
+struct notes_display_config_data {
+	int load_refs;
+	int load_command;
+	struct external_notes_state *external_notes_state;
+};
+
 static int notes_display_config(const char *k, const char *v,
-				const struct config_context *ctx UNUSED,
+				const struct config_context *ctx,
 				void *cb)
 {
-	int *load_refs = cb;
+	struct notes_display_config_data *data = cb;
 
-	if (*load_refs && !strcmp(k, "notes.displayref")) {
+	if (data->load_refs && !strcmp(k, "notes.displayref")) {
 		if (!v)
 			return config_error_nonbool(k);
 		string_list_add_refs_by_glob(&display_notes_refs, v);
 	}
+
+	if (data->load_command && !strcmp(k, "notes.externalcommand")) {
+		if (!v)
+			return config_error_nonbool(k);
+
+		set_external_notes_command(data->external_notes_state, v);
+	}
+
+	if (data->load_command && !strcmp(k, "notes.externalcommandname")) {
+		if (!v)
+			return config_error_nonbool(k);
+
+		if (strchr(v, '\n') || strchr(v, '\r'))
+			return error(_("notes.externalCommandName must not contain a newline"));
+
+		set_external_notes_command_name(data->external_notes_state, v);
+	}
+
+	if (data->load_command && !strcmp(k, "notes.externalcommandtimeoutms")) {
+		int timeout_ms;
+
+		if (!v)
+			return config_error_nonbool(k);
+
+		timeout_ms = git_config_int(k, v, ctx->kvi);
+		if (timeout_ms < 0)
+			return error(_("notes.externalCommandTimeoutMs must be non-negative"));
+
+		set_external_notes_command_timeout_ms(data->external_notes_state,
+						      timeout_ms);
+	}
+
+	if (data->load_command && !strcmp(k, "notes.externalcommandforgrep"))
+		set_external_notes_for_grep(data->external_notes_state,
+					    git_config_bool(k, v));
 
 	return 0;
 }
@@ -1075,17 +1119,21 @@ void init_display_notes(struct display_notes_opt *opt)
 {
 	memset(opt, 0, sizeof(*opt));
 	opt->use_default_notes = -1;
+	opt->use_external_notes = -1;
 	string_list_init_dup(&opt->extra_notes_refs);
 }
 
 void release_display_notes(struct display_notes_opt *opt)
 {
 	string_list_clear(&opt->extra_notes_refs, 0);
+	external_notes_free(opt->external_notes_state);
+	opt->external_notes_state = NULL;
 }
 
 void enable_default_display_notes(struct display_notes_opt *opt, int *show_notes)
 {
 	opt->use_default_notes = 1;
+	opt->default_notes_suppressed_by_external = 0;
 	*show_notes = 1;
 }
 
@@ -1102,31 +1150,96 @@ void enable_ref_display_notes(struct display_notes_opt *opt, int *show_notes,
 void disable_display_notes(struct display_notes_opt *opt, int *show_notes)
 {
 	opt->use_default_notes = -1;
+	opt->use_external_notes = -1;
+	opt->default_notes_suppressed_by_external = 0;
 	string_list_clear(&opt->extra_notes_refs, 0);
 	*show_notes = 0;
+}
+
+/*
+ * Resolve the default-notes tri-state in one place. Callers must not test
+ * use_default_notes directly unless they specifically need the unresolved
+ * command-line state.
+ */
+static bool display_notes_use_default(const struct display_notes_opt *opt)
+{
+	/* Options aren't specified, default to true. */
+	if (!opt)
+		return true;
+
+	/* Explicitly enabled. */
+	if (opt->use_default_notes > 0)
+		return true;
+
+	/* Undefined and no explicit notes-ref specified, default to true. */
+	if (opt->use_default_notes == -1 && !opt->extra_notes_refs.nr)
+		return true;
+
+	return false;
+}
+
+/*
+ * Resolve the external-notes tri-state. The unset value follows the resolved
+ * default-notes decision, which means "git log" runs the helper by default
+ * but "git log --notes=<ref>" does not.
+ */
+static bool display_notes_use_external(const struct display_notes_opt *opt)
+{
+	/* Options aren't specified, default to false. */
+	if (!opt)
+		return false;
+
+	/* Explicitly enabled. */
+	if (opt->use_external_notes > 0)
+		return true;
+
+	/* Undefined and to use default notes set, default to true. */
+	if (opt->use_external_notes < 0 && display_notes_use_default(opt))
+		return true;
+
+	return false;
 }
 
 void load_display_notes(struct display_notes_opt *opt)
 {
 	char *display_ref_env;
-	int load_config_refs = 0;
+	struct notes_display_config_data config = { 0, 0 };
+	struct notes_display_config_data protected_config = { 0, 0 };
+	bool use_default_notes = display_notes_use_default(opt);
+	bool use_external_notes = display_notes_use_external(opt);
+
 	display_notes_refs.strdup_strings = 1;
+
+	if (use_external_notes && opt->external_notes_state) {
+		external_notes_reset(opt->external_notes_state);
+	} else if (opt) {
+		external_notes_free(opt->external_notes_state);
+		opt->external_notes_state = NULL;
+	}
 
 	assert(!display_notes_trees);
 
-	if (!opt || opt->use_default_notes > 0 ||
-	    (opt->use_default_notes == -1 && !opt->extra_notes_refs.nr)) {
+	if (use_default_notes) {
 		string_list_append_nodup(&display_notes_refs, default_notes_ref(the_repository));
 		display_ref_env = getenv(GIT_NOTES_DISPLAY_REF_ENVIRONMENT);
 		if (display_ref_env) {
 			string_list_add_refs_from_colon_sep(&display_notes_refs,
 							    display_ref_env);
-			load_config_refs = 0;
+			config.load_refs = 0;
 		} else
-			load_config_refs = 1;
+			config.load_refs = 1;
 	}
 
-	repo_config(the_repository, notes_display_config, &load_config_refs);
+	if (use_external_notes) {
+		if (!opt->external_notes_state)
+			opt->external_notes_state = external_notes_new();
+
+		protected_config.load_command = 1;
+		protected_config.external_notes_state = opt->external_notes_state;
+	}
+
+	repo_config(the_repository, notes_display_config, &config);
+	git_protected_config(notes_display_config, &protected_config);
 
 	if (opt) {
 		struct string_list_item *item;
@@ -1266,23 +1379,89 @@ void free_notes(struct notes_tree *t)
 }
 
 /*
+ * Append one already-loaded note message to the given strbuf.
+ *
+ * Notes read from refs and notes obtained from notes.externalCommand both use
+ * this helper so they share the same encoding, header, and indentation rules.
+ *
+ * (raw == true) gives the %N userformat; otherwise, the note message is given
+ * for human consumption.
+ */
+static void format_note_data(const char *ref, const char *msg, size_t msglen,
+			     struct strbuf *sb, const char *output_encoding,
+			     bool raw, bool literal_ref)
+{
+	static const char utf8[] = "utf-8";
+	char *reencoded = NULL;
+	const char *msg_p, *msg_end;
+
+	/* Convert the note text from UTF-8 to the requested output encoding. */
+	if (output_encoding && *output_encoding &&
+	    !is_encoding_utf8(output_encoding)) {
+		size_t reencoded_len;
+		reencoded = reencode_string_len(msg, msglen, output_encoding,
+						 utf8, &reencoded_len);
+		if (reencoded) {
+			msg = reencoded;
+			msglen = reencoded_len;
+		}
+	}
+
+	/* we will end the annotation by a newline anyway */
+	if (msglen && msg[msglen - 1] == '\n')
+		msglen--;
+
+	/* Raw mode is the %N userformat, so it omits the "Notes" header. */
+	if (!raw) {
+		if (!ref)
+			strbuf_addstr(sb, "\nNotes:\n");
+		else if (!literal_ref && !strcmp(ref, GIT_NOTES_DEFAULT_REF))
+			strbuf_addstr(sb, "\nNotes:\n");
+		else {
+			if (!literal_ref) {
+				skip_prefix(ref, "refs/", &ref);
+				skip_prefix(ref, "notes/", &ref);
+			}
+			strbuf_addf(sb, "\nNotes (%s):\n", ref);
+		}
+	}
+
+	msg_end = msg + msglen;
+	for (msg_p = msg; msg_p < msg_end; ) {
+		const char *eol = memchr(msg_p, '\n', msg_end - msg_p);
+		size_t linelen = eol ? eol - msg_p : msg_end - msg_p;
+
+		/* Human output indents note body lines under the header. */
+		if (!raw)
+			strbuf_addstr(sb, "    ");
+
+		strbuf_add(sb, msg_p, linelen);
+		strbuf_addch(sb, '\n');
+
+		msg_p += linelen;
+		if (msg_p < msg_end)
+			msg_p++;
+	}
+
+	free(reencoded);
+}
+
+/*
  * Fill the given strbuf with the notes associated with the given object.
  *
  * If the given notes_tree structure is not initialized, it will be auto-
  * initialized to the default value (see documentation for init_notes() above).
  * If the given notes_tree is NULL, the internal/default notes_tree will be
  * used instead.
- *
- * (raw == true) gives the %N userformat; otherwise, the note message is given
- * for human consumption.
  */
-static void format_note(struct notes_tree *t, const struct object_id *object_oid,
-			struct strbuf *sb, const char *output_encoding, bool raw)
+static void format_note_from_tree(struct notes_tree *t,
+				  const struct object_id *object_oid,
+				  struct strbuf *sb,
+				  const char *output_encoding, bool raw)
 {
-	static const char utf8[] = "utf-8";
 	const struct object_id *oid;
-	char *msg, *msg_p;
-	unsigned long linelen, msglen;
+	char *msg;
+	unsigned long msglen;
 	enum object_type type;
 
 	if (!t)
@@ -1300,51 +1479,38 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 		return;
 	}
 
-	if (output_encoding && *output_encoding &&
-	    !is_encoding_utf8(output_encoding)) {
-		char *reencoded = reencode_string(msg, output_encoding, utf8);
-		if (reencoded) {
-			free(msg);
-			msg = reencoded;
-			msglen = strlen(msg);
-		}
-	}
-
-	/* we will end the annotation by a newline anyway */
-	if (msglen && msg[msglen - 1] == '\n')
-		msglen--;
-
-	if (!raw) {
-		const char *ref = t->ref;
-		if (!ref || !strcmp(ref, GIT_NOTES_DEFAULT_REF)) {
-			strbuf_addstr(sb, "\nNotes:\n");
-		} else {
-			skip_prefix(ref, "refs/", &ref);
-			skip_prefix(ref, "notes/", &ref);
-			strbuf_addf(sb, "\nNotes (%s):\n", ref);
-		}
-	}
-
-	for (msg_p = msg; msg_p < msg + msglen; msg_p += linelen + 1) {
-		linelen = strchrnul(msg_p, '\n') - msg_p;
-
-		if (!raw)
-			strbuf_addstr(sb, "    ");
-		strbuf_add(sb, msg_p, linelen);
-		strbuf_addch(sb, '\n');
-	}
+	format_note_data(t->ref, msg, msglen, sb, output_encoding, raw, false);
 
 	free(msg);
 }
 
-void format_display_notes(const struct object_id *object_oid,
-			  struct strbuf *sb, const char *output_encoding, bool raw)
+void format_display_notes(const struct commit *commit,
+			  struct strbuf *sb, const char *output_encoding,
+			  bool raw,
+			  struct external_notes_state *external_state)
 {
 	int i;
+	const struct object_id *commit_oid = &commit->object.oid;
+
 	assert(display_notes_trees);
 	for (i = 0; display_notes_trees[i]; i++)
-		format_note(display_notes_trees[i], object_oid, sb,
-			    output_encoding, raw);
+		format_note_from_tree(display_notes_trees[i], commit_oid, sb,
+				      output_encoding, raw);
+
+	if (external_notes_command_configured(external_state)) {
+		struct strbuf out = STRBUF_INIT;
+
+		if (format_external_note(external_state, commit_oid, &out) == 0
+		    && out.len) {
+			const char *label =
+				external_notes_command_name(external_state);
+
+			format_note_data(label, out.buf, out.len, sb,
+					 output_encoding, raw, true);
+		}
+
+		strbuf_release(&out);
+	}
 }
 
 int copy_note(struct notes_tree *t,

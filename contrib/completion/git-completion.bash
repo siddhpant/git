@@ -2023,7 +2023,7 @@ _git_fetch ()
 
 __git_format_patch_extra_options="
 	--full-index --not --all --no-prefix --src-prefix=
-	--dst-prefix= --notes
+	--dst-prefix= --notes --external-notes --no-external-notes
 "
 
 _git_format_patch ()
@@ -2215,7 +2215,7 @@ __git_log_common_options="
 __git_log_gitk_options="
 	--dense --sparse --full-history
 	--simplify-merges --simplify-by-decoration
-	--left-right --notes --no-notes
+	--left-right --notes --no-notes --external-notes --no-external-notes
 "
 # Options that go well for log and shortlog (not gitk)
 __git_log_shortlog_options="

@@ -26,7 +26,7 @@ SYNOPSIS
 		   [--[no-]cover-letter] [--quiet]
 		   [--commit-list-format=<format-spec>]
 		   [--[no-]encode-email-headers]
-		   [--no-notes | --notes[=<ref>]]
+		   [--no-notes | --notes[=<ref>]] [--[no-]external-notes]
 		   [--interdiff=<previous>]
 		   [--range-diff=<previous> [--creation-factor=<percent>]]
 		   [--filename-max-length=<n>]
@@ -394,6 +394,15 @@ configuration options in linkgit:git-notes[1] to use this workflow).
 +
 The default is `--no-notes`, unless the `format.notes` configuration is
 set.
+
+--external-notes::
+--no-external-notes::
+	Invoke or do not invoke `notes.externalCommand` to obtain external
+	notes. Like `--notes=<ref>`, `--external-notes` names an explicit
+	note source and by itself does not include the default notes refs.
+	Use `--external-notes --notes` to include the default notes refs
+	too, or combine `--external-notes` with `--notes=<ref>` to include
+	external notes with specific notes refs.
 
 --signature=<signature>::
 --no-signature::

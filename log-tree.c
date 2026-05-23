@@ -856,9 +856,12 @@ void show_log(struct rev_info *opt)
 	if (opt->show_notes) {
 		struct strbuf notebuf = STRBUF_INIT;
 		bool raw = (opt->commit_format == CMIT_FMT_USERFORMAT);
+		const struct display_notes_opt *notes_opt = &opt->notes_opt;
 
-		format_display_notes(&commit->object.oid, &notebuf,
-				     get_log_output_encoding(), raw);
+		format_display_notes(commit, &notebuf,
+				     get_log_output_encoding(), raw,
+				     notes_opt->external_notes_state);
+
 		ctx.notes_message = strbuf_detach(&notebuf, NULL);
 	}
 

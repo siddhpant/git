@@ -397,6 +397,7 @@ libgit_sources = [
   'notes-merge.c',
   'notes-utils.c',
   'notes.c',
+  'notes-external.c',
   'object-file-convert.c',
   'object-file.c',
   'object-name.c',
